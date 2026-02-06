@@ -67,9 +67,13 @@ class Classifier:
 
     def _ollama_messages(self, sender: str, subject: str, body: str) -> list:
         """System- und Few-Shot-Nachrichten für Ollama."""
-        # Kriterienlogik: Label nur, wenn die Mail die definierenden Kriterien der Kategorie erfüllt.
+        # Kriterienbasiert: Label nur bei eindeutigem Kriterien-Match; sonst nur Sonstiges (nie kombiniert)
+        default_rule = (
+            "Prüfe für jede Kategorie: Erfüllt diese E-Mail die definierenden Kriterien **eindeutig**? "
+            "Nur wenn ja → das passende Label. Erfüllt sie **keine** Kategorie eindeutig (z. B. Test, persönlich, unklar) → **nur** [\"Sonstiges\"]. "
+            "Sonstiges wird niemals mit anderen Labels kombiniert – bei Sonstiges immer genau ein Label: Sonstiges. "
+        )
         label_logic = (
-            "Vergib ein Label nur, wenn die E-Mail die definierenden Kriterien dieser Kategorie eindeutig erfüllt. "
             "Banking=Absender/Inhalt Bank, Konto, Transaktionen (nicht AGB/Cloud). "
             "Streaming=Video/Musik-Anbieter wie Netflix/Spotify/Prime (nicht Fahrdienste). "
             "Rechnung=Inhalt ist Rechnungsstellung, Zahlungsziel, Faktura. "
@@ -77,16 +81,20 @@ class Classifier:
             "Shopping=Bestellung, Versand, Tracking. "
             "Social Media=Benachrichtigung von LinkedIn/Twitter/Instagram/Facebook/YouTube. "
             "Support=Hilfe, Ticket, Bug, Kundenservice-Dialog. "
-            "Newsletter=Massenversand mit Marketing/Update-Charakter von Anbieter/Marke (Werbung, Aktionen, Abo-News) – nicht: persönliche 1:1-Mail, Test-Mail, private Notiz. "
+            "Newsletter=Massenversand mit Marketing/Update von Anbieter/Marke – nicht: persönliche 1:1-Mail, Test-Mail. "
             "Versicherung=Police, Beitrag, Schaden (nicht Legal/AGB). "
-            "Sonstiges=erfüllt keine andere Kategorie: persönlich, Test, Weiterleitung, unklar, rechtliche/Cloud-Mails; bei Unsicherheit immer Sonstiges."
+            "Sonstiges=Mail erfüllt keine der obigen Kategorien eindeutig; dann **nur** [\"Sonstiges\"], kein zweites Label."
+        )
+        closing_rule = (
+            " Wenn keine Kategorie eindeutig passt: ausschließlich [\"Sonstiges\"]. Antworte nur mit JSON: {\"labels\":[\"...\"]}."
         )
         system_msg = (
-            "Du klassifizierst E-Mails nach klaren Kriterien. Wähle 1–3 Labels aus: "
+            default_rule
+            + "Kategorien: "
             + ", ".join(self.labels_allowed)
             + ". "
             + label_logic
-            + " Prüfe: Ist diese Mail von der Art, für die die Kategorie gedacht ist? Wenn nein oder unklar → Sonstiges. Antworte nur mit JSON: {\"labels\":[\"...\"]}."
+            + closing_rule
         )
         shots = [
             ("From: rechnung@firma.de\nSubject: Ihre Rechnung 2025-09\nBody: Betrag 129,00 EUR, Zahlungsziel 14 Tage.", ["Rechnung"]),

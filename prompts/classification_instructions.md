@@ -1,11 +1,16 @@
 # Klassifizierungslogik
 
-Jedes Label ist für einen **bestimmten E-Mail-Typ** gedacht. Ein Label nur vergeben, wenn die Mail die **definierenden Kriterien** dieser Kategorie **eindeutig erfüllt** – nicht, weil irgendein Stichwort vorkommt.
+**Entscheidung nach Kriterien, nicht nach „Unsicherheit“:**  
+Prüfe: Erfüllt diese E-Mail die **definierenden Kriterien** einer Kategorie **eindeutig**?  
+- **Ja** (z. B. echte Rechnung mit Betrag/Zahlungsziel, echter Newsletter von Anbieter mit Werbung/Update) → das passende Label (ggf. 1–3, wenn mehrere passen).  
+- **Nein** (keine Kategorie passt eindeutig: Test, persönlich, unklar, Weiterleitung ohne Kontext) → **nur Sonstiges**. Sonstiges wird **nie** mit anderen Labels kombiniert – genau ein Label.
+
+Jedes Label ist für einen **bestimmten E-Mail-Typ** gedacht. Ein Label nur vergeben, wenn die Mail die Kriterien dieser Kategorie **eindeutig** erfüllt – nicht, weil ein Stichwort vorkommt.
 
 **Grundprinzip:**  
-Frage: „Ist diese E-Mail *von der Art*, für die diese Kategorie gedacht ist?“  
-- Wenn **ja** (klares Geschäftsfeld, klarer Zweck, typischer Absender) → passendes Label.  
-- Wenn **nein** oder **unklar** (persönliche Nachricht, Test, Weiterleitung, Einzelfall ohne klare Zuordnung) → **Sonstiges**.
+Frage: „Erfüllt diese Mail die Kriterien dieser Kategorie eindeutig?“  
+- **Ja** → passendes Label.  
+- **Nein** (oder keine Kategorie trifft zu) → **nur** Sonstiges, kein zweites Label.
 
 Beispiele helfen, aber neue Mails (andere Absender, andere Formulierungen) müssen anhand der **Kriterien** eingeordnet werden, nicht anhand von Stichwörtern.
 
@@ -60,17 +65,15 @@ Beispiele helfen, aber neue Mails (andere Absender, andere Formulierungen) müss
 
 **Sonstiges**  
 - *Wofür die Kategorie da ist:* Alles, was **keine** der obigen Kategorien **eindeutig** erfüllt.  
-- *Kriterien:* Die Mail erfüllt die definierenden Kriterien keiner anderen Kategorie. Dazu zählen z. B.: persönliche Nachrichten ohne klare Kategorie, Test-Mails, Weiterleitungen ohne Kontext, rechtliche/AGB/Cloud-Hinweise, unklarer Inhalt, Einzelfälle die zu keiner Kategorie passen.  
-- Im Zweifel immer **Sonstiges**.
+- *Kriterien:* Die Mail erfüllt die definierenden Kriterien keiner anderen Kategorie (z. B. persönlich, Test, Weiterleitung ohne Kontext, rechtliche/AGB/Cloud-Hinweise, unklarer Inhalt).  
+- **Sonstiges wird nie mit anderen Labels kombiniert** – wenn Sonstiges, dann nur dieses eine Label.
 
 ---
 
 ## Regeln (kurz)
 
-- Nur erlaubte Labels verwenden. Maximal 3 pro Mail.  
-- Label nur vergeben, wenn die **Kriterien** der Kategorie klar erfüllt sind.  
-- Persönliche Mails, Tests, Unklares → **Sonstiges**.  
-- Bei Unsicherheit → **Sonstiges**.
+- Nur erlaubte Labels. Spezifische Labels: nur wenn die **Kriterien** der Kategorie **eindeutig** erfüllt sind (dann 1–3 Labels möglich).  
+- Keine Kategorie passt eindeutig (Test, persönlich, unklar) → **nur** Sonstiges, kein zweites Label.
 
 ## Beispiele (zur Orientierung, Logik liegt in den Kriterien)
 
