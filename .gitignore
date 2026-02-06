@@ -1,0 +1,22 @@
+# Sensible Daten – niemals committen
+credentials.json
+token.json
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store

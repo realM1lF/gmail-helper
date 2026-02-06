@@ -1,0 +1,41 @@
+version: "3.6"
+services:
+  gmailai:
+    container_name: ddev-${DDEV_SITENAME}-gmailai
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.main", "--loop", "--interval", "60"]
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: $DDEV_APPROOT
+    volumes:
+      - ../:/app:rw
+      - ../credentials.json:/app/credentials.json:ro
+      - ../token.json:/app/token.json:rw
+    environment:
+      - OPENAI_API_KEY
+      - MODEL
+      - PROVIDER=openai
+      - GMAIL_Q
+      - MAX_RESULTS
+      - DRY_RUN=false
+      - LABELS_ALLOWED
+    restart: "always"
+  ollama:
+    container_name: ddev-${DDEV_SITENAME}-ollama
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: $DDEV_APPROOT
+    restart: "no"
+
+volumes:
+  ollama:
+    # named volume ohne Zusatzfelder (ddev-Validator erlaubt hier keine restart/labels)
+
+

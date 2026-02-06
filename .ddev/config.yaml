@@ -1,0 +1,7 @@
+name: gmail-ai
+type: python
+router_http_port: 80
+router_https_port: 443
+webimage: ddev/ddev-webserver
+
+
