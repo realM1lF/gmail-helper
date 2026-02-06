@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import time
 
 from .config import load_config
-from .gmail_client import GmailClient
+from .gmail_client import GmailClient, ALLOWED_LABEL_COLORS
 from .classifier import Classifier
 
 
@@ -16,51 +16,25 @@ logger = logging.getLogger(__name__)
 
 
 ALL_LABELS = [
-    "Rechnungen",
-     "Support",
-    "Privat",
-    "Newsletter",
-    "Events",
-    "FYI",
     "Banking",
-    "Versicherung",
-    "Angebote",
     "Streaming",
-    "Gaming",
-    "Klamotten",
-    "Technik",
-    "Sport",
-    "Arbeit",
+    "Rechnung",
+    "Warnung",
     "Shopping",
-    "Account",
     "Social Media",
+    "Support",
+    "Newsletter",
+    "Versicherung",
     "Sonstiges",
-    "ai/error",
 ]
 
-LABEL_COLORS = {
-    # Zulässige Gmail-Palette (Auswahl), Hex kleingeschrieben, Textfarbe auf erlaubte Werte beschränkt
-    "Rechnungen": {"backgroundColor": "#ffad46", "textColor": "#000000"},
-    "Support": {"backgroundColor": "#f83a22", "textColor": "#ffffff"},
-    "Privat": {"backgroundColor": "#b99aff", "textColor": "#000000"},
-    "Newsletter": {"backgroundColor": "#4986e7", "textColor": "#ffffff"},
-    "Events": {"backgroundColor": "#fbe983", "textColor": "#000000"},
-    "FYI": {"backgroundColor": "#c2c2c2", "textColor": "#000000"},
-    "Banking": {"backgroundColor": "#7bd148", "textColor": "#000000"},
-    "Versicherung": {"backgroundColor": "#92e1c0", "textColor": "#000000"},
-    "Angebote": {"backgroundColor": "#ff7537", "textColor": "#000000"},
-    "Streaming": {"backgroundColor": "#9fc6e7", "textColor": "#000000"},
-    "Gaming": {"backgroundColor": "#f691b2", "textColor": "#000000"},
-    "Klamotten": {"backgroundColor": "#cca6ac", "textColor": "#000000"},
-    "Technik": {"backgroundColor": "#9a9cff", "textColor": "#000000"},
-    "Sport": {"backgroundColor": "#42d692", "textColor": "#000000"},
-    "Arbeit": {"backgroundColor": "#ac725e", "textColor": "#ffffff"},
-    "Shopping": {"backgroundColor": "#16a765", "textColor": "#ffffff"},
-    "Account": {"backgroundColor": "#7ae7bf", "textColor": "#000000"},
-    "Social Media": {"backgroundColor": "#ff887c", "textColor": "#000000"},
-    "Sonstiges": {"backgroundColor": "#cabdbf", "textColor": "#000000"},
-    "ai/error": {"backgroundColor": "#cd74e6", "textColor": "#000000"},
-}
+# Nur Gmail-erlaubte Farben (ALLOWED_LABEL_COLORS); Textfarbe #ffffff für dunklere Töne
+_DARK_BG = frozenset({"#5484ed", "#46d6db", "#51b749", "#dc2127", "#4986e7", "#ac725e", "#cd74e6"})
+LABEL_COLORS = {}
+for i, name in enumerate(ALL_LABELS):
+    bg = ALLOWED_LABEL_COLORS[i % len(ALLOWED_LABEL_COLORS)]
+    txt = "#ffffff" if bg in _DARK_BG else "#000000"
+    LABEL_COLORS[name] = {"backgroundColor": bg, "textColor": txt}
 
 
 def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_cli: int | None = None) -> None:
@@ -78,20 +52,17 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
     logger.info("Starte Gmail-Klassifikation | dry_run=%s | q=%.80s | max=%d", cfg.dry_run, cfg.gmail_query, cfg.max_results)
 
     gmail = GmailClient()
-    name_to_id = gmail.ensure_labels(ALL_LABELS, colors=LABEL_COLORS if cfg.set_label_colors else None)
+    name_to_id = gmail.ensure_labels(ALL_LABELS, colors=None)
     logger.info("Vorhandene/angelegte Labels: %s", ", ".join(sorted(name_to_id.keys())))
 
-    allowed = [l for l in ALL_LABELS if not l.startswith("ai/") and l != "Sonstiges"] + ["Sonstiges"]
+    allowed = [l for l in ALL_LABELS if l != "Sonstiges"] + ["Sonstiges"]
     classifier = Classifier(
-        api_key=cfg.openai_api_key,
-        model=cfg.model,
         labels_allowed=allowed,
-        provider=cfg.provider,
         ollama_base_url=cfg.ollama_base_url,
         ollama_model=cfg.ollama_model,
     )
 
-    effective_max = min(cfg.max_results, 20) if cfg.provider == "ollama" else cfg.max_results
+    effective_max = min(cfg.max_results, 20)
     # PASS 1: Unread der letzten 2 Tage
     message_ids = gmail.list_new_message_ids(cfg.gmail_query, effective_max)
     logger.info("Gefundene Nachrichten: %d (q=%.120s)", len(message_ids), cfg.gmail_query)
@@ -118,7 +89,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
             # Skip nur wenn bereits ein spezifisches User-Label (≠ Sonstiges, ≠ ai/*) existiert
             existing_user_labels = [id_to_name.get(lid, "") for lid in label_ids]
             has_specific = any(
-                (lbl in ALL_LABELS) and (lbl != "Sonstiges") and (not lbl.startswith("ai/"))
+                (lbl in ALL_LABELS) and (lbl != "Sonstiges")
                 for lbl in existing_user_labels
             )
             if has_specific:
@@ -133,8 +104,8 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
                 labels.discard("Sonstiges")
                 remove_sonstiges.append(mid)
         except Exception as exc:
-            logger.exception("Fehler bei Klassifikation, markiere als ai/error: %s", exc)
-            labels = {"ai/error"}
+            logger.exception("Fehler bei Klassifikation, markiere als Warnung: %s", exc)
+            labels = {"Warnung"}
 
         for label_name in labels:
             plan.setdefault(label_name, []).append(mid)
@@ -147,7 +118,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
         needed = set(plan.keys()) - set(name_to_id.keys())
         if needed:
             logger.info("Fehlende Labels werden angelegt: %s", ", ".join(sorted(needed)))
-            extra_map = gmail.ensure_labels(list(needed), colors=LABEL_COLORS if cfg.set_label_colors else None)
+            extra_map = gmail.ensure_labels(list(needed), colors=None)
             name_to_id.update(extra_map)
         for name, mids in plan.items():
             if name not in name_to_id:
@@ -180,7 +151,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
             logger.info("Re-Label: %s | %s -> %s", mid, subject[:80], ", ".join(sorted(labels2)))
         except Exception as exc:
             logger.exception("Fehler bei Re-Labeling: %s", exc)
-            plan2.setdefault("ai/error", []).append(mid)
+            plan2.setdefault("Warnung", []).append(mid)
 
     if cfg.dry_run:
         for name, mids in plan2.items():
@@ -190,7 +161,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
         needed2 = set(plan2.keys()) - set(name_to_id.keys()) - {"Sonstiges"}
         if needed2:
             logger.info("Fehlende Labels (Re-Label) werden angelegt: %s", ", ".join(sorted(needed2)))
-            extra_map2 = gmail.ensure_labels(list(needed2), colors=LABEL_COLORS if cfg.set_label_colors else None)
+            extra_map2 = gmail.ensure_labels(list(needed2), colors=None)
             name_to_id.update(extra_map2)
         for name, mids in plan2.items():
             if name == "Sonstiges":
@@ -209,8 +180,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="Nur geplante Aktionen ausgeben, nichts schreiben")
     ap.add_argument("--q", default=None, help="Optional Gmail-Query überschreiben")
     ap.add_argument("--max-results", type=int, default=None, help="Max Anzahl Nachrichten")
-    ap.add_argument("--loop", action="store_true", help="Im Intervall wiederholt ausführen")
-    ap.add_argument("--interval", type=int, default=60, help="Intervall in Sekunden für Loop-Modus")
+    ap.add_argument("--loop", action="store_true", help="Im Intervall wiederholt ausführen (alle 30s)")
+    ap.add_argument("--interval", type=int, default=30, help="Intervall in Sekunden für Loop-Modus")
     args = ap.parse_args()
 
     if args.loop:

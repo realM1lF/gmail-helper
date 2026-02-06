@@ -1,0 +1,19 @@
+#!/bin/bash
+# Universal "run" command - führt den ersten Parameter als Befehl aus
+# z.B. "run gmailhelper" -> führt "gmailhelper" aus
+
+if [ $# -eq 0 ]; then
+    echo "Verwendung: run <befehl> [args...]"
+    exit 1
+fi
+
+CMD="$1"
+shift
+
+# Prüfe ob Befehl in PATH existiert
+if command -v "$CMD" >/dev/null 2>&1; then
+    exec "$CMD" "$@"
+else
+    echo "Fehler: Befehl '$CMD' nicht gefunden im PATH"
+    exit 1
+fi

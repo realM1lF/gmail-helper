@@ -69,21 +69,7 @@ class GmailClient:
         return name_to_id
 
     def _try_set_label_color(self, label_id: str, label_name: str, desired: Dict[str, str]) -> None:
-        """Versucht, eine Farbe zu setzen. Fällt bei Palette-Fehlern auf erlaubte Werte zurück."""
-        try:
-            self.service.users().labels().patch(
-                userId="me",
-                id=label_id,
-                body={"color": desired},
-            ).execute()
-            return
-        except HttpError as e:
-            msg = str(e)
-            if "allowed color palette" not in msg:
-                logger.warning("Konnte Farbe für Label '%s' nicht setzen: %s", label_name, e)
-                return
-
-        # Fallback: wähle startindex deterministisch pro Label, damit unterschiedliche Farben entstehen
+        """Setzt eine Farbe aus der Gmail-Palette (nur ALLOWED_LABEL_COLORS)."""
         start = abs(hash(label_name)) % len(ALLOWED_LABEL_COLORS)
         order = ALLOWED_LABEL_COLORS[start:] + ALLOWED_LABEL_COLORS[:start]
         for bg in order:
@@ -94,7 +80,7 @@ class GmailClient:
                         id=label_id,
                         body={"color": {"backgroundColor": bg, "textColor": txt}},
                     ).execute()
-                    logger.info("Label '%s' Farbe gesetzt auf bg=%s txt=%s (Fallback)", label_name, bg, txt)
+                    logger.info("Label '%s' Farbe gesetzt auf bg=%s txt=%s", label_name, bg, txt)
                     return
                 except HttpError:
                     continue

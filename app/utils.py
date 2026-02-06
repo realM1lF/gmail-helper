@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract_text_from_responses(resp: Any) -> str:
-    """Extrahiert Textinhalt aus einer OpenAI Responses-Antwort.
+    """Extrahiert Textinhalt aus einer Responses-Antwort (legacy/optional).
 
     Bevorzugt `resp.output_text` (neuere SDKs). Fällt konservativ auf bekannte
     Strukturen zurück, falls das Feld nicht existiert.
@@ -39,12 +39,18 @@ def safe_json(text: str, default: Dict[str, Any]) -> Dict[str, Any]:
         return default
 
 
-def heuristic_labels(subject: str, sender: str, body: str) -> List[str]:
-    """Einfache, schnelle Vor-Klassifikation auf Basis von Stichwörtern.
+# Nur diese Labels dürfen von der Heuristik zurückgegeben werden (wie in main.ALL_LABELS).
+_HEURISTIC_ALLOWED = frozenset({
+    "Banking", "Streaming", "Rechnung", "Warnung", "Shopping",
+    "Social Media", "Support", "Newsletter", "Versicherung",
+})
 
-    Liefert maximal 3 Labels. Priorität: Rechnungen > Banking > Account > Newsletter
-    > Social Media > Support > Arbeit > Privat > Angebote > Streaming >
-    Gaming > Klamotten > Technik > Sport > Events > FYI > Sonstiges.
+
+def heuristic_labels(subject: str, sender: str, body: str) -> List[str]:
+    """Einfache Klassifikation per Stichwörter. Nur erlaubte Labels (kein Sonstiges).
+
+    Priorität: Rechnung > Warnung > Banking > Support > Newsletter > Social Media
+    > Shopping > Streaming > Versicherung. Maximal 3 Labels.
     """
     text = f"{subject}\n{sender}\n{body}".lower()
 
@@ -54,46 +60,29 @@ def heuristic_labels(subject: str, sender: str, body: str) -> List[str]:
     labels: List[str] = []
 
     if has_any(["rechnung", "invoice", "faktura", "zahlungsfrist", "beleg", "faktur", "rechnungsnummer", "rechnung von", "invoice from"]):
-        labels.append("Rechnungen")
+        labels.append("Rechnung")
+    if has_any(["passwort", "password", "2fa", "two-factor", "bestätigungscode", "verification code", "sicherheitswarnung", "kontoaktivität", "fehlermeldung", "fehler beim", "warnung:", "verdächtig"]):
+        labels.append("Warnung")
     if has_any(["sparkasse", "volksbank", "commerzbank", "dkb", "n26", "revolut", "konto", "überweisung", "visa", "mastercard"]):
         labels.append("Banking")
-    if has_any(["passwort", "password", "2fa", "two-factor", "bestätigungscode", "verification code", "sicherheitswarnung", "kontoaktivität"]):
-        labels.append("Account")
+    if has_any(["hilfe", "support", "problem", "fehler", "bug", "ticket", "störung"]):
+        labels.append("Support")
     if has_any(["unsubscribe", "abmelden", "newsletter", "newsletter@", "list-unsubscribe", "preferences", "manage subscription"]):
         labels.append("Newsletter")
     if has_any(["linkedin", "instagram", "facebook", "youtube", "tiktok", "twitter", "x.com", "twitch"]):
         labels.append("Social Media")
-    if has_any(["hilfe", "support", "problem", "fehler", "bug", "ticket", "störung"]):
-        labels.append("Support")
-    # Einkaufs-/Bestellbezug eindeutig als Shopping
-    if has_any(["bestellung", "auftrag", "lieferung", "track", "sendungsverfolgung", "versandbestätigung", "bestellnummer", "kunde", "kundennummer"]):
+    if has_any(["bestellung", "auftrag", "lieferung", "track", "sendungsverfolgung", "versandbestätigung", "bestellnummer", "order", "tracking", "shop", "kauf", "checkout"]):
         labels.append("Shopping")
-    if has_any(["angebot", "sale", "rabatt", "deal", "gutschein", "% rabatt"]):
-        labels.append("Angebote")
     if has_any(["netflix", "prime video", "disney+", "spotify", "paramount+"]):
         labels.append("Streaming")
-    if has_any(["game", "gaming", "videospiel", "videospiels", "spiel ", "konsole", "steam", "epic games", "xbox", "playstation", "ps5", "ps4", "nintendo", "switch"]):
-        labels.append("Gaming")
-    if has_any(["mode", "fashion", "klamotten", "retoure", "größe"]):
-        labels.append("Klamotten")
-    if has_any(["bestellung", "order", "eingegangen", "versandbestätigung", "sendungsverfolgung", "lieferung", "tracking", "bestellnummer", "shop", "kauf", "checkout"]):
-        labels.append("Shopping")
-    if has_any(["technik", "hardware", "software", "release notes", "firmware", "update"]):
-        labels.append("Technik")
-    if has_any(["verein", "fitness", "workout", "trainer", "spielplan", "liga"]):
-        labels.append("Sport")
-    if has_any(["meeting", "projekt", "onboarding", "offboarding", "hr@", "zulieferer", "rechnungstellung", "angebot" ]):
-        labels.append("Arbeit")
-    if has_any(["termin", "einladung", "webinar", "konferenz", "kalender", "ics "]):
-        labels.append("Events")
-    if has_any(["zur info", "fyi", "info:", "update:", "status-"]):
-        labels.append("FYI")
+    if has_any(["versicherung", "police", "beitrag", "schaden", "schadensmeldung"]):
+        labels.append("Versicherung")
 
-    # Entdoppeln, Reihenfolge beibehalten
+    # Nur erlaubte Labels, entdoppelt, max 3
     seen = set()
     result = []
     for l in labels:
-        if l not in seen:
+        if l in _HEURISTIC_ALLOWED and l not in seen:
             result.append(l)
             seen.add(l)
         if len(result) >= 3:

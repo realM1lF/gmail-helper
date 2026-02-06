@@ -4,11 +4,10 @@ import json
 import logging
 from typing import List
 
-from openai import OpenAI
 import httpx
 import time
 
-from .utils import extract_text_from_responses, heuristic_labels
+from .utils import heuristic_labels
 
 
 def _extract_labels_json(text: str) -> dict | None:
@@ -45,86 +44,20 @@ logger = logging.getLogger(__name__)
 
 
 class Classifier:
-    """Wrapper um OpenAI Responses API für strukturierte Label-Ausgaben."""
+    """Klassifiziert E-Mails per Ollama (lokal) und liefert strukturierte Label-Ausgaben."""
 
-    def __init__(self, api_key: str, model: str, labels_allowed: List[str], provider: str = "openai", ollama_base_url: str | None = None, ollama_model: str | None = None):
-        self.provider = provider
-        self.model = model
+    def __init__(
+        self,
+        labels_allowed: List[str],
+        ollama_base_url: str | None = None,
+        ollama_model: str | None = None,
+    ):
         self.labels_allowed = labels_allowed
         self.ollama_base_url = ollama_base_url or "http://localhost:11434"
-        self.ollama_model = ollama_model or "llama3.1"
-        self.client = OpenAI(api_key=api_key) if (provider == "openai" and api_key) else None
-        self.schema = {
-            "name": "email_labels_schema",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "labels": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": labels_allowed},
-                        "minItems": 1,
-                        "maxItems": 3,
-                    }
-                },
-                "required": ["labels"],
-                "additionalProperties": False,
-            },
-        }
+        self.ollama_model = ollama_model or "qwen2.5:7b-instruct"
 
     def classify(self, sender: str, subject: str, body: str) -> List[str]:
-        # 1) KI entscheidet zuerst; Heuristik dient als Fallback
-        if self.provider == "ollama":
-            ai_labels = self._classify_via_ollama(sender, subject, body)
-        else:
-            if not self.client:
-                logger.warning("OpenAI-Client nicht initialisiert: OPENAI_API_KEY fehlt.")
-                ai_labels = ["Sonstiges"]
-            else:
-                system_msg = (
-                    "Du bist ein präziser E‑Mail‑Klassifizierer. Wähle 1–3 Labels aus: "
-                    + ", ".join(self.labels_allowed)
-                    + ". Wenn nichts passt, nutze 'Sonstiges'. "
-                    "Antworte ausschließlich mit JSON im Format {\"labels\":[\"...\"]}. "
-                    "Bevorzuge spezifische Labels vor 'Sonstiges'."
-                )
-
-                # Few‑Shot Beispiele (4 reichen für Klassifikation, spart Tokens/Kosten)
-                shots = [
-                    ("From: rechnung@firma.de\nSubject: Ihre Rechnung 2025-09\nBody: Betrag 129,00 EUR, Zahlungsziel 14 Tage.", ["Rechnungen"]),
-                    ("From: shop@beispiel.de\nSubject: Versandbestätigung Bestellung 12345\nBody: Ihr Paket ist unterwegs, Tracking enthalten.", ["Shopping"]),
-                    ("From: noreply@account.com\nSubject: Neues Konto eingerichtet\nBody: Bitte bestätigen Sie Ihre E‑Mail.", ["Account"]),
-                    ("From: news@anbieter.de\nSubject: Angebote der Woche\nBody: -20% auf alles, jetzt zugreifen.", ["Angebote", "Newsletter"]),
-                ]
-
-                # Body auf 1500 Zeichen begrenzen (reicht meist; spart API-Kosten)
-                user_msg = f"From: {sender}\nSubject: {subject}\nBody: {body[:1500]}"
-                messages = [{"role": "system", "content": system_msg}]
-                for u, labels in shots:
-                    messages.append({"role": "user", "content": u})
-                    messages.append({"role": "assistant", "content": json.dumps({"labels": labels}, ensure_ascii=False)})
-                messages.append({"role": "user", "content": user_msg})
-
-                try:
-                    completion = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                        response_format={"type": "json_object"},
-                        temperature=0.2,
-                    )
-                    txt = completion.choices[0].message.content or ""
-                except Exception as e:
-                    logger.error("Klassifikation (OpenAI) fehlgeschlagen: %s", e)
-                    txt = "{}"
-
-                try:
-                    data = json.loads(txt)
-                    ai_labels = [l for l in data.get("labels", []) if l in self.labels_allowed]
-                    if not ai_labels:
-                        ai_labels = ["Sonstiges"]
-                except Exception:
-                    ai_labels = ["Sonstiges"]
-
-        # 2) Fallback/Verstärkung mit Heuristik, wenn KI unentschlossen
+        ai_labels = self._classify_via_ollama(sender, subject, body)
         if ai_labels == ["Sonstiges"] or not ai_labels:
             heur = heuristic_labels(subject, sender, body)
             if heur:
@@ -133,17 +66,37 @@ class Classifier:
         return ai_labels
 
     def _ollama_messages(self, sender: str, subject: str, body: str) -> list:
-        """Gleiche System- und Few-Shot-Struktur wie OpenAI für bessere lokale Ergebnisse."""
+        """System- und Few-Shot-Nachrichten für Ollama."""
+        # Kriterienlogik: Label nur, wenn die Mail die definierenden Kriterien der Kategorie erfüllt.
+        label_logic = (
+            "Vergib ein Label nur, wenn die E-Mail die definierenden Kriterien dieser Kategorie eindeutig erfüllt. "
+            "Banking=Absender/Inhalt Bank, Konto, Transaktionen (nicht AGB/Cloud). "
+            "Streaming=Video/Musik-Anbieter wie Netflix/Spotify/Prime (nicht Fahrdienste). "
+            "Rechnung=Inhalt ist Rechnungsstellung, Zahlungsziel, Faktura. "
+            "Warnung=Fehlermeldung oder Sicherheitshinweis. "
+            "Shopping=Bestellung, Versand, Tracking. "
+            "Social Media=Benachrichtigung von LinkedIn/Twitter/Instagram/Facebook/YouTube. "
+            "Support=Hilfe, Ticket, Bug, Kundenservice-Dialog. "
+            "Newsletter=Massenversand mit Marketing/Update-Charakter von Anbieter/Marke (Werbung, Aktionen, Abo-News) – nicht: persönliche 1:1-Mail, Test-Mail, private Notiz. "
+            "Versicherung=Police, Beitrag, Schaden (nicht Legal/AGB). "
+            "Sonstiges=erfüllt keine andere Kategorie: persönlich, Test, Weiterleitung, unklar, rechtliche/Cloud-Mails; bei Unsicherheit immer Sonstiges."
+        )
         system_msg = (
-            "Du bist ein präziser E‑Mail‑Klassifizierer. Wähle 1–3 Labels aus: "
+            "Du klassifizierst E-Mails nach klaren Kriterien. Wähle 1–3 Labels aus: "
             + ", ".join(self.labels_allowed)
-            + ". Wenn nichts passt, nutze 'Sonstiges'. Antworte ausschließlich mit JSON: {\"labels\":[\"...\"]}. Bevorzuge spezifische Labels."
+            + ". "
+            + label_logic
+            + " Prüfe: Ist diese Mail von der Art, für die die Kategorie gedacht ist? Wenn nein oder unklar → Sonstiges. Antworte nur mit JSON: {\"labels\":[\"...\"]}."
         )
         shots = [
-            ("From: rechnung@firma.de\nSubject: Ihre Rechnung 2025-09\nBody: Betrag 129,00 EUR, Zahlungsziel 14 Tage.", ["Rechnungen"]),
+            ("From: rechnung@firma.de\nSubject: Ihre Rechnung 2025-09\nBody: Betrag 129,00 EUR, Zahlungsziel 14 Tage.", ["Rechnung"]),
             ("From: shop@beispiel.de\nSubject: Versandbestätigung Bestellung 12345\nBody: Ihr Paket ist unterwegs, Tracking enthalten.", ["Shopping"]),
-            ("From: noreply@account.com\nSubject: Neues Konto eingerichtet\nBody: Bitte bestätigen Sie Ihre E‑Mail.", ["Account"]),
-            ("From: news@anbieter.de\nSubject: Angebote der Woche\nBody: -20% auf alles, jetzt zugreifen.", ["Angebote", "Newsletter"]),
+            ("From: noreply@bank.de\nSubject: Neue Anmeldung erkannt\nBody: Falls Sie das nicht waren, ändern Sie sofort Ihr Passwort.", ["Warnung"]),
+            ("From: CloudPlatform-noreply@google.com\nSubject: [Legal Update] Google transitions to data processor for reCAPTCHA\nBody: We're writing to let you know... legal terms... data processor...", ["Sonstiges"]),
+            ("From: Bolt\nSubject: Fahre nach deinen Vorstellungen\nBody: Mit der Bolt App... Fahrttypen, Route anpassen, Buchung.", ["Newsletter"]),
+            ("From: news@anbieter.de\nSubject: Angebote der Woche\nBody: -20% auf alles, jetzt zugreifen.", ["Newsletter"]),
+            ("From: Schwerdhoefer, Sebastian\nSubject: Testmail\nBody: Das ist nur ein Test", ["Sonstiges"]),
+            ("From: unknown@random.org\nSubject: Fwd: Meeting\nBody: Unklarer Inhalt, keine klare Kategorie.", ["Sonstiges"]),
         ]
         user_msg = f"From: {sender}\nSubject: {subject}\nBody: {body[:1500]}"
         messages = [{"role": "system", "content": system_msg}]
@@ -154,7 +107,8 @@ class Classifier:
         return messages
 
     def _classify_via_ollama(self, sender: str, subject: str, body: str) -> List[str]:
-        # Native Ollama API mit Structured Output (format = JSON-Schema) für zuverlässigeres JSON
+        messages = self._ollama_messages(sender, subject, body)
+        base_url = self.ollama_base_url.rstrip("/")
         ollama_format = {
             "type": "object",
             "properties": {
@@ -170,7 +124,7 @@ class Classifier:
         }
         payload = {
             "model": self.ollama_model,
-            "messages": self._ollama_messages(sender, subject, body),
+            "messages": messages,
             "format": ollama_format,
             "options": {"temperature": 0.2},
             "stream": False,
@@ -180,19 +134,24 @@ class Classifier:
         for attempt in range(2):
             try:
                 with httpx.Client(timeout=90) as client:
-                    r = client.post(f"{self.ollama_base_url}/api/chat", json=payload)
+                    r = client.post(f"{base_url}/api/chat", json=payload)
                     r.raise_for_status()
                     data = r.json()
                     txt = (data.get("message") or {}).get("content") or ""
                     break
             except httpx.HTTPStatusError as e:
-                # Ältere Ollama-Versionen unterstützen ggf. kein format-Schema; Fallback auf format: "json"
-                if e.response.status_code == 400 and attempt == 0 and payload.get("format") is not None:
+                if e.response.status_code == 404:
+                    txt = self._ollama_v1_chat(messages, base_url)
+                    if txt is not None:
+                        break
+                    last_err = e
+                elif e.response.status_code == 400 and attempt == 0 and payload.get("format") is not None:
                     logger.debug("Ollama format-Schema nicht unterstützt, versuche format: json")
                     payload["format"] = "json"
                     last_err = e
                     continue
-                last_err = e
+                else:
+                    last_err = e
                 sleep_s = 2 ** attempt
                 logger.warning("Ollama-Klassifikation Versuch %d fehlgeschlagen (%s), retry in %ds", attempt + 1, e, sleep_s)
                 time.sleep(sleep_s)
@@ -212,4 +171,20 @@ class Classifier:
                 return labels
         return ["Sonstiges"]
 
-
+    def _ollama_v1_chat(self, messages: list, base_url: str) -> str | None:
+        """Ollama-API /v1/chat/completions (Fallback bei 404 von /api/chat)."""
+        payload = {
+            "model": self.ollama_model,
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": False,
+        }
+        try:
+            with httpx.Client(timeout=90) as client:
+                r = client.post(f"{base_url}/v1/chat/completions", json=payload)
+                r.raise_for_status()
+                data = r.json()
+                return (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        except Exception as e:
+            logger.debug("Ollama /v1/chat/completions fehlgeschlagen: %s", e)
+            return None

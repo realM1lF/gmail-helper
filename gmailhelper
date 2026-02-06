@@ -1,0 +1,27 @@
+#!/bin/bash
+# Wrapper-Script für Gmail Helper Launcher
+# Kann von überall im Terminal mit "gmailhelper" (oder "run gmailhelper" via Alias) gestartet werden.
+
+# Symlink auflösen, damit SCRIPT_DIR das echte Projektverzeichnis ist (mit .venv)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+LAUNCHER="$SCRIPT_DIR/launcher.py"
+
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "Fehler: Venv nicht gefunden in $SCRIPT_DIR/.venv"
+    echo "Bitte 'pip install -r requirements.txt' im Projektverzeichnis ausführen."
+    exit 1
+fi
+
+if [ ! -f "$LAUNCHER" ]; then
+    echo "Fehler: launcher.py nicht gefunden in $SCRIPT_DIR"
+    exit 1
+fi
+
+cd "$SCRIPT_DIR" && "$VENV_PYTHON" "$LAUNCHER" "$@"
