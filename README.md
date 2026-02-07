@@ -1,136 +1,207 @@
-# Gmail Helper (Gmail AI Labeler)
+# Gmail Helper
 
-**Gmail Helper** ist ein kleines Python-Tool, das deine Gmail-Postfächer automatisch ordnet: Es holt neue E-Mails ab, klassifiziert sie per **Ollama** (lokal) in vordefinierte Kategorien und setzt die passenden Gmail-Labels. So bleiben Rechnungen, Newsletter, Support und Co. übersichtlich sortiert – ohne manuelles Ablage.
+**KI-gestützte automatische E-Mail-Klassifizierung für Gmail**
 
-## Was macht das Projekt?
+Gmail Helper analysiert deine E-Mails lokal mit KI (Ollama) und ordnet sie automatisch in Kategorien ein – ohne Cloud, ohne API-Kosten, ohne Datenweitergabe.
 
-- **E-Mails abrufen:** Nutzt die Gmail API und eine konfigurierbare Suchanfrage (z. B. ungelesen, letzte 2 Tage).
-- **Klassifizieren:** Jede Nachricht wird an Ollama geschickt (Absender, Betreff, Anriss des Bodys). Das Modell wählt 1–3 Labels aus einer festen Liste (z. B. Rechnung, Support, Newsletter, Banking, Shopping).
-- **Labels setzen:** Die gewählten Gmail-Labels werden den Nachrichten zugewiesen. Bereits spezifisch gelabelte Mails werden übersprungen.
-- **Re-Labeling:** E-Mails, die nur „Sonstiges“ haben, werden in einem zweiten Durchlauf erneut geprüft (z. B. innerhalb der letzten 7 Tage), um nachträglich passendere Labels zu vergeben.
+```
+    ╔═══════════════════════════════════════════════════════════╗
+    ║  📧  G M A I L   H E L P E R                              ║
+    ╚═══════════════════════════════════════════════════════════╝
+```
 
-Klassifikation läuft ausschließlich über **Ollama** (lokal, keine API-Kosten).
+---
 
-## Voraussetzungen
+## ✨ Was macht Gmail Helper?
 
-- Python 3.11+
-- Gmail-Konto mit OAuth 2.0 (Desktop Client): `credentials.json`
-- **Ollama** installiert und lauffähig (z. B. `ollama serve`)
+1. **Liest neue E-Mails** aus deinem Gmail-Postfach (z.B. ungelesene der letzten 2 Tage)
+2. **Analysiert Inhalt** mit lokaler KI (Absender, Betreff, Text)
+3. **Ordnet automatisch Labels zu** aus 10 Kategorien
+4. **Setzt Gmail-Labels** – übersichtlich sortiert, ohne manuelles Ablage
 
-## Schnellstart
+### Automatische Kategorien (Labels)
 
-1. **Repository klonen und Abhängigkeiten installieren**
+| Label | Beschreibung | Beispiele |
+|-------|--------------|-----------|
+| **Banking** | Bank- & Finanzkommunikation | Kontoauszüge, Überweisungen, Kartenabbuchungen |
+| **Streaming** | Video/Musik-Abos | Netflix, Spotify, Disney+, Prime Video |
+| **Rechnung** | Rechnungen & Zahlungsaufforderungen | Rechnungsstellung, Faktura, Zahlungsziel |
+| **Warnung** | Sicherheits- & Fehlermeldungen | Login-Warnungen, Verdachtsmeldungen, 2FA |
+| **Shopping** | Bestellungen & Versand | Versandbestätigungen, Tracking, Retouren |
+| **Social Media** | Plattform-Benachrichtigungen | LinkedIn, Instagram, Facebook, YouTube |
+| **Support** | Kundenservice & Tickets | Hilfe-Anfragen, Bug-Reports, Tickets |
+| **Newsletter** | Marketing & Updates | Werbe-Mails, Angebote, Produkt-Updates |
+| **Versicherung** | Versicherungs-Dokumente | Police, Beitrag, Schadensmeldung |
+| **Sonstiges** | Alles andere | Persönliches, Test-Mails, unklare Inhalte |
 
-   ```bash
-   cd .gmail-ai
-   pip install -r requirements.txt
-   ```
+---
 
-2. **Umgebung konfigurieren**
+## 🚀 Schnellstart (3 Schritte)
 
-   - `.env` anlegen (orientiere dich an `.env.example`).
-   - `OLLAMA_BASE_URL` und `OLLAMA_MODEL` (z. B. `qwen2.5:7b-instruct`) setzen.
-
-3. **Gmail OAuth einrichten**
-
-   - `credentials.json` (OAuth Desktop Client von Google Cloud Console) ins Projektverzeichnis legen.
-   - Ersten Lauf ausführen (öffnet Browser für Anmeldung, erzeugt `token.json`):
-
-   ```bash
-   python app/main.py --dry-run
-   ```
-
-4. **Dry-Run vs. echte Änderungen**
-
-   - Nur anzeigen, was gelabelt würde:  
-     `python app/main.py --dry-run`
-   - Labels tatsächlich setzen:  
-     `python app/main.py`
-
-## Nutzung
-
-| Aktion              | Befehl |
-|---------------------|--------|
-| Dry-Run (nur anzeigen) | `python app/main.py --dry-run` |
-| Labels setzen       | `python app/main.py` |
-| Eigene Gmail-Query  | `python app/main.py --q "in:inbox newer_than:7d"` |
-| Max. Anzahl Mails    | `python app/main.py --max-results 50` |
-| Dauerlauf (alle 30s) | `python app/main.py --loop` (Standard-Intervall 30s) |
-
-### Launcher (kleine UI)
-
-Statt Befehlszeile kannst du den **Launcher** nutzen: Ollama-URL und Modell wählen, Werte werden in `.env` geschrieben. Mit **START** startet das Hauptprogramm im **Dauerlauf** und prüft alle 30 Sekunden, ob neue E-Mails gelabelt werden können (Fenster offen lassen). Falls Ollama nicht erreichbar ist, wird automatisch `ollama serve` gestartet.
+### 1. Repository klonen
 
 ```bash
-cd .gmail-ai
-python launcher.py
+git clone <repository-url>
+cd gmail-helper/.gmail-ai
 ```
 
-(Tkinter wird mitgeliefert; bei Nutzung der Projekt-Venv: `.venv/bin/python launcher.py`.)
+### 2. Einmalig Setup ausführen
 
-## Konfiguration (Umgebungsvariablen)
+```bash
+gmailhelper setup
+```
 
-| Variable | Beschreibung | Standard |
-|----------|--------------|----------|
-| `OLLAMA_BASE_URL` | Basis-URL der Ollama-Instanz | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Modellname bei Ollama | `qwen2.5:7b-instruct` |
-| `GMAIL_Q` | Gmail-Suchanfrage | `in:inbox is:unread newer_than:2d` |
-| `MAX_RESULTS` | Max. Anzahl zu bearbeitender Mails pro Lauf | `20` |
-| `DRY_RUN` | Nur planen, keine Labels setzen | `false` |
-| `SET_LABEL_COLORS` | Gmail-Label-Farben setzen | `false` |
-| `LOG_LEVEL` | Logging (z. B. DEBUG, INFO) | `INFO` |
+Das interaktive Setup erledigt alles automatisch:
+- ✅ Prüft Systemvoraussetzungen
+- ✅ Installiert Ollama (KI-Laufzeit)
+- ✅ Lädt KI-Modell herunter (~4.4 GB)
+- ✅ Richtet Python-Umgebung ein
+- ✅ Konfiguriert Gmail OAuth
+- ✅ Erstellt Konfiguration
 
-Weitere Optionen siehe `app/config.py` und `.env.example`.
+**Dauer:** ca. 10-15 Minuten (je nach Internet)
 
-## Modell (Ollama)
+### 3. Starten
 
-Empfohlene Modelle für stabiles JSON und deutsche Mails:
+```bash
+# Testlauf (zeigt an, setzt keine Labels)
+gmailhelper run --test
 
-- `qwen2.5:7b-instruct`
-- `llama3.1:8b`, `mistral:7b-instruct`
-- Leichtgewichte: `qwen2.5:3b`
+# Live-Betrieb (setzt wirklich Labels)
+gmailhelper run --live
+```
 
-## Docker & ddev
+---
 
-- **Docker-Image bauen** (im Projektordner `.gmail-ai`):
+## 🖥️ Systemanforderungen
 
-  ```bash
-  docker build -t gmail-ai:local .
-  ```
+| | Minimal | Empfohlen |
+|--|---------|-----------|
+| **RAM** | 8 GB | 16 GB |
+| **Speicher** | 10 GB frei | 15 GB frei |
+| **Betriebssystem** | macOS 12+, Ubuntu 20.04+ | macOS 14+, Ubuntu 22.04+ |
+| **Internet** | Erforderlich für Setup | Erforderlich für Setup |
+| **Browser** | Für Gmail OAuth | Für Gmail OAuth |
 
-- **ddev:** Über `.ddev/docker-compose.gmail.yaml` können zusätzliche Services (z. B. Ollama) eingebunden werden. `credentials.json` und `token.json` per Volume mounten.
+**Hinweis:** Windows wird aktuell nicht unterstützt.
 
-  ```bash
-  ddev start
-  ddev exec -s gmailai python app/main.py --dry-run
-  ```
+---
 
-## Sicherheit & sensible Daten
+## 📋 Alle Befehle
 
-- **Nur notwendiger Gmail-Scope:** `gmail.modify` (Labels setzen/entfernen).
-- **Keine sensiblen Dateien ins Repository:**  
-  `.env`, `credentials.json` und `token.json` stehen in `.gitignore` und dürfen **niemals** eingecheckt werden.
-- **Body-Länge:** E-Mail-Body wird für die KI auf einen begrenzten Anriss (z. B. 1500 Zeichen) gekürzt.
+| Befehl | Beschreibung |
+|--------|--------------|
+| `gmailhelper` | Zeigt Willkommensbildschirm mit System-Info |
+| `gmailhelper setup` | Erstinstallation durchführen |
+| `gmailhelper setup --reset` | Einstellungen ändern (Token bleibt erhalten) |
+| `gmailhelper run --test` | Testlauf (Dry-Run, einmalig) |
+| `gmailhelper run --live` | Live-Dauerlauf (alle 30s, setzt Labels) |
+| `gmailhelper run --test --max-results 50` | Test mit 50 E-Mails |
+| `gmailhelper stop` | Alle laufenden Prozesse stoppen |
+| `gmailhelper status` | System-Status anzeigen |
+| `gmailhelper help` | Detaillierte Hilfe |
 
-## Projektstruktur (Auszug)
+---
+
+## ⚙️ Konfiguration
+
+Die Konfiguration wird in `.env` gespeichert:
+
+```bash
+# Ollama (lokale KI)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=mistral:7b-instruct
+
+# Gmail Query (welche E-Mails bearbeiten)
+GMAIL_Q=in:inbox is:unread newer_than:2d
+
+# Verhalten
+MAX_RESULTS=20
+DRY_RUN=false
+SET_LABEL_COLORS=false
+LOG_LEVEL=INFO
+```
+
+**Anpassen:**
+```bash
+# Eigene Gmail-Suchanfrage
+gmailhelper run --test --q "in:inbox newer_than:1d"
+
+# Mehr E-Mails auf einmal
+gmailhelper run --test --max-results 50
+```
+
+---
+
+## 🔒 Datenschutz & Sicherheit
+
+- **🔐 Lokale KI:** Keine Daten gehen in die Cloud (Ollama läuft lokal)
+- **📧 Nur Gmail-Scope:** `gmail.modify` (Labels setzen/entfernen)
+- **🚫 Keine Datenweitergabe:** E-Mails werden nur lokal analysiert
+- **⚠️ Sensible Dateien:** `.env`, `credentials.json`, `token.json` sind in `.gitignore`
+- **📝 Body-Limit:** E-Mail-Text wird auf 1000 Zeichen gekürzt für Analyse
+
+---
+
+## 🐛 Fehlerbehebung
+
+### "Ollama nicht erreichbar"
+```bash
+# Ollama manuell starten
+ollama serve
+```
+
+### "credentials.json nicht gefunden"
+1. Gehe zu [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Erstelle OAuth 2.0 Client ID (Desktop App)
+3. Lade `credentials.json` herunter
+4. Kopiere es ins Projektverzeichnis
+
+### Setup neu starten
+```bash
+# Einstellungen ändern (Token & Credentials bleiben)
+gmailhelper setup --reset
+```
+
+### Prozesse stoppen
+```bash
+gmailhelper stop
+```
+
+---
+
+## 🏗️ Architektur
 
 ```
-.gmail-ai/
+gmail-helper/
 ├── app/
-│   ├── main.py          # Einstieg, Ablauf (Labels holen → klassifizieren → setzen)
-│   ├── classifier.py     # Ollama-Anbindung, strukturierte Label-Ausgabe
-│   ├── gmail_client.py   # Gmail API (Labels, Nachrichten lesen/schreiben)
-│   ├── config.py         # Konfiguration aus Umgebungsvariablen
-│   └── utils.py          # Heuristiken, JSON-Hilfen
-├── prompts/
-│   └── classification_instructions.md  # Regeln/Beispiele für die Klassifikation
-├── launcher.py           # Kleine UI (Ollama-Modell, START)
-├── requirements.txt
-├── Dockerfile
-├── .env.example          # Vorlage für .env (ohne echte Secrets)
-└── README.md
+│   ├── main.py          # Hauptprogramm, 2-Pass-Verarbeitung
+│   ├── classifier.py    # KI-Klassifizierung (Ollama)
+│   ├── gmail_client.py  # Gmail API Integration
+│   ├── config.py        # Konfigurationsmanagement
+│   ├── utils.py         # Heuristiken & Hilfsfunktionen
+│   └── setup.py         # Interaktives Setup
+├── gmailhelper           # CLI-Entrypoint
+├── requirements.txt      # Python-Abhängigkeiten
+└── README.md            # Diese Datei
 ```
 
-## Lizenz
+**2-Pass-Verarbeitung:**
+1. **Pass 1:** Neue ungelesene E-Mails klassifizieren & labeln
+2. **Pass 2:** E-Mails mit nur "Sonstiges" nach 7 Tagen erneut prüfen
 
-MIT
+---
+
+## 🤝 Mitmachen
+
+Fehler gefunden oder Feature-Wunsch? Erstelle ein Issue oder Pull Request!
+
+---
+
+## 📄 Lizenz
+
+MIT License – Siehe [LICENSE](LICENSE)
+
+---
+
+**Made with ❤️ für übersichtliche Postfächer**
