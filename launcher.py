@@ -14,7 +14,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 ENV_PATH = PROJECT_ROOT / ".env"
 
-OLLAMA_MODELS = ["mistral:7b-instruct", "qwen2.5:7b-instruct", "llama3.1:8b", "qwen2.5:3b"]
+OLLAMA_MODELS = ["mistral:7b-instruct", "llama3.1:8b", "qwen2.5:7b-instruct", "qwen2.5:3b"]
 OLLAMA_CHECK_URL = "http://localhost:11434"
 OLLAMA_WAIT_SEC = 4
 

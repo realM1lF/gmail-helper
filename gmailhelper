@@ -1,27 +1,488 @@
 #!/bin/bash
-# Wrapper-Script für Gmail Helper Launcher
-# Kann von überall im Terminal mit "gmailhelper" (oder "run gmailhelper" via Alias) gestartet werden.
+#
+# Gmail Helper - Unified CLI
+# Usage: gmailhelper [command] [options]
+#
 
-# Symlink auflösen, damit SCRIPT_DIR das echte Projektverzeichnis ist (mit .venv)
+set -e
+
+# =============================================================================
+# Pfad-Konfiguration (Symlink-sicher)
+# =============================================================================
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
-  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
-  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
-LAUNCHER="$SCRIPT_DIR/launcher.py"
 
-if [ ! -f "$VENV_PYTHON" ]; then
-    echo "Fehler: Venv nicht gefunden in $SCRIPT_DIR/.venv"
-    echo "Bitte 'pip install -r requirements.txt' im Projektverzeichnis ausführen."
-    exit 1
-fi
+PROJECT_ROOT="$SCRIPT_DIR"
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+MAIN_PY="$PROJECT_ROOT/app/main.py"
+LAUNCHER="$PROJECT_ROOT/launcher.py"
 
-if [ ! -f "$LAUNCHER" ]; then
-    echo "Fehler: launcher.py nicht gefunden in $SCRIPT_DIR"
-    exit 1
-fi
+# =============================================================================
+# Farben für Output
+# =============================================================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m' # No Color
 
-cd "$SCRIPT_DIR" && "$VENV_PYTHON" "$LAUNCHER" "$@"
+# =============================================================================
+# Hilfsfunktionen
+# =============================================================================
+
+check_venv() {
+    if [ ! -f "$VENV_PYTHON" ]; then
+        echo -e "${RED}❌ Fehler: Python-Venv nicht gefunden in $PROJECT_ROOT/.venv${NC}"
+        echo "   Bitte zuerst ausführen: pip install -r requirements.txt"
+        exit 1
+    fi
+}
+
+check_ollama() {
+    if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+get_ollama_model() {
+    curl -s http://localhost:11434/api/tags 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unbekannt"
+}
+
+show_help() {
+    cat << 'EOF'
+╔══════════════════════════════════════════════════════════════════╗
+║                    Gmail Helper CLI                              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+USAGE:
+    gmailhelper [command] [options]
+
+COMMANDS:
+    setup               Erstinstallation durchführen
+    setup --reset       Einstellungen ändern (Token bleibt erhalten)
+    run --test          Test-Modus: Einmaliger Dry-Run
+    run --live          Live-Modus: Dauerlauf (alle 30 Sekunden)
+    stop                Stoppt alle laufenden Gmail Helper Prozesse
+    status              Zeigt System-Status an
+    help                Zeigt diese Hilfe an
+
+BEISPIELE:
+    gmailhelper                 # Willkommensbildschirm anzeigen
+    gmailhelper setup           # Erstinstallation
+    gmailhelper setup --reset   # Einstellungen ändern
+    gmailhelper run --test      # Testlauf (zeigt nur an, setzt keine Labels)
+    gmailhelper run --live      # Dauerlauf (labels setzen, alle 30s)
+    gmailhelper stop            # Alle Prozesse stoppen
+    gmailhelper status          # Status von Ollama, Config, etc.
+    gmailhelper help            # Diese Hilfe
+
+ZUSÄTZLICHE OPTIONEN (für run --test / run --live):
+    --max-results N     Maximale Anzahl E-Mails (default: 20)
+    --q "query"         Benutzerdefinierte Gmail-Query
+
+EOF
+}
+
+get_system_info() {
+    # RAM
+    local TOTAL_RAM=""
+    if command -v sysctl &>/dev/null; then
+        # macOS
+        TOTAL_RAM=$(sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024/1024) " GB"}')
+    elif [ -f /proc/meminfo ]; then
+        # Linux
+        TOTAL_RAM=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print int($2/1024/1024) " GB"}')
+    fi
+    echo "$TOTAL_RAM"
+}
+
+show_system_requirements() {
+    echo -e "   ${BOLD}Systemanforderungen:${NC}\n"
+    echo -e "   ${DIM}Minimal:${NC}              8 GB RAM, 10 GB freier Speicher"
+    echo -e "   ${DIM}Empfohlen:${NC}            16 GB RAM, 15 GB freier Speicher"
+    echo -e "   ${DIM}Betriebssystem:${NC}       macOS 12+ oder Linux (Ubuntu 20.04+)"
+    echo -e "   ${DIM}KI-Modell:${NC}            mistral:7b-instruct (~4.4 GB)"
+    echo -e "   ${DIM}Internet:${NC}             Erforderlich für Download & Gmail API"
+    echo ""
+    
+    # Aktuelle System-Info anzeigen
+    local CURRENT_RAM=$(get_system_info)
+    local CURRENT_OS=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        CURRENT_OS=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1,2 || echo "macOS")
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        CURRENT_OS=$(lsb_release -d 2>/dev/null | cut -f2 || echo "Linux")
+    fi
+    
+    if [ -n "$CURRENT_RAM" ] || [ -n "$CURRENT_OS" ]; then
+        echo -e "   ${BOLD}Dein System:${NC}\n"
+        [ -n "$CURRENT_OS" ] && echo -e "   ${DIM}Betriebssystem:${NC}       $CURRENT_OS"
+        [ -n "$CURRENT_RAM" ] && echo -e "   ${DIM}RAM:${NC}                  $CURRENT_RAM"
+        
+        # Warnung bei wenig RAM
+        if [ -n "$CURRENT_RAM" ]; then
+            local RAM_GB=$(echo "$CURRENT_RAM" | grep -o '[0-9]*' | head -1)
+            if [ "$RAM_GB" -lt 8 ] 2>/dev/null; then
+                echo -e "   ${YELLOW}⚠️  WARNUNG: Wenig RAM - Modell läuft möglicherweise langsam${NC}"
+            elif [ "$RAM_GB" -lt 16 ] 2>/dev/null; then
+                echo -e "   ${GREEN}✅ RAM ausreichend für Standard-Betrieb${NC}"
+            else
+                echo -e "   ${GREEN}✅ Optimal für flüssige Performance${NC}"
+            fi
+        fi
+        echo ""
+    fi
+}
+
+show_welcome() {
+    # Prüfe Setup-Status
+    local SETUP_COMPLETE=true
+    local MISSING_ITEMS=""
+    
+    if [ ! -f "$PROJECT_ROOT/.venv/bin/python" ]; then
+        SETUP_COMPLETE=false
+        MISSING_ITEMS="${MISSING_ITEMS}\n   ${YELLOW}• Python Environment${NC}"
+    fi
+    
+    if ! check_ollama 2>/dev/null; then
+        SETUP_COMPLETE=false
+        MISSING_ITEMS="${MISSING_ITEMS}\n   ${YELLOW}• Ollama (KI-Laufzeit)${NC}"
+    fi
+    
+    if [ ! -f "$PROJECT_ROOT/credentials.json" ]; then
+        SETUP_COMPLETE=false
+        MISSING_ITEMS="${MISSING_ITEMS}\n   ${YELLOW}• Gmail OAuth Zugang${NC}"
+    fi
+    
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        SETUP_COMPLETE=false
+        MISSING_ITEMS="${MISSING_ITEMS}\n   ${YELLOW}• Konfiguration${NC}"
+    fi
+    
+    # ASCII Art Header
+    echo ""
+    echo -e "${CYAN}    ╔═══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}    ║                                                           ║${NC}"
+    echo -e "${CYAN}    ║${NC}  ${BOLD}📧  G M A I L   H E L P E R${NC}                              ${CYAN}║${NC}"
+    echo -e "${CYAN}    ║                                                           ║${NC}"
+    echo -e "${CYAN}    ║${NC}   ${DIM}KI-gestützte E-Mail-Klassifizierung${NC}                    ${CYAN}║${NC}"
+    echo -e "${CYAN}    ║${NC}   ${DIM}Automatisches Labeling mit lokaler KI (Ollama)${NC}         ${CYAN}║${NC}"
+    echo -e "${CYAN}    ║                                                           ║${NC}"
+    echo -e "${CYAN}    ╚═══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Systemanforderungen immer anzeigen
+    show_system_requirements
+    
+    # Wenn Setup nicht komplett - KLARER HINWEIS
+    if [ "$SETUP_COMPLETE" = false ]; then
+        echo -e "   ${YELLOW}╔═══════════════════════════════════════════════════════╗${NC}"
+        echo -e "   ${YELLOW}║${NC}  🚀  ${BOLD}ERSTE SCHRITTE${NC}                                    ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}╠═══════════════════════════════════════════════════════╣${NC}"
+        echo -e "   ${YELLOW}║${NC}                                                       ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}║${NC}  Dies ist das erste Mal, dass du Gmail Helper       ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}║${NC}  verwendest. Führe zuerst die Einrichtung durch:    ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}║${NC}                                                       ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}║${NC}     ${BOLD}${CYAN}gmailhelper setup${NC}                                 ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}║${NC}                                                       ${YELLOW}║${NC}"
+        echo -e "   ${YELLOW}╚═══════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        
+        # Fehlende Komponenten anzeigen
+        if [ -n "$MISSING_ITEMS" ]; then
+            echo -e "   ${DIM}Folgende Komponenten werden eingerichtet:${NC}"
+            echo -e "$MISSING_ITEMS"
+            echo ""
+        fi
+        
+        # Was macht setup?
+        echo -e "   ${DIM}Das Setup installiert:${NC}"
+        echo -e "   ${DIM}• Ollama (lokale KI-Laufzeitumgebung)${NC}"
+        echo -e "   ${DIM}• KI-Modell mistral:7b-instruct (~4.4 GB Download)${NC}"
+        echo -e "   ${DIM}• Python Umgebung & Abhängigkeiten${NC}"
+        echo -e "   ${DIM}• Gmail OAuth Verbindung${NC}"
+        echo -e "   ${DIM}• Konfiguration (.env)${NC}"
+        echo ""
+        
+    else
+        # Setup ist komplett - Schnellstart anzeigen
+        echo -e "   ${GREEN}✅ Einrichtung abgeschlossen${NC}\n"
+        
+        echo -e "   ${BOLD}Schnellstart:${NC}\n"
+        
+        echo -e "   ${CYAN}gmailhelper run --test${NC}"
+        echo -e "      ${DIM}→ Testlauf (zeigt an, setzt keine Labels)${NC}\n"
+        
+        echo -e "   ${CYAN}gmailhelper run --live${NC}"
+        echo -e "      ${DIM}→ Live-Betrieb (labels werden gesetzt)${NC}\n"
+        
+        echo -e "   ${CYAN}gmailhelper status${NC}"
+        echo -e "      ${DIM}→ System-Status anzeigen${NC}\n"
+    fi
+    
+    # Alle Befehle
+    echo -e "   ${BOLD}Alle verfügbaren Befehle:${NC}\n"
+    echo -e "   ${MAGENTA}setup${NC}          Erstinstallation durchführen"
+    echo -e "   ${MAGENTA}setup --reset${NC}  Einstellungen ändern (Token bleibt)"
+    echo -e "   ${MAGENTA}run --test${NC}     Test-Modus (Dry-Run, einmalig)"
+    echo -e "   ${MAGENTA}run --live${NC}     Live-Dauerlauf (alle 30 Sekunden)"
+    echo -e "   ${MAGENTA}stop${NC}           Alle laufenden Prozesse stoppen"
+    echo -e "   ${MAGENTA}status${NC}         System-Status anzeigen"
+    echo -e "   ${MAGENTA}help${NC}           Detaillierte Hilfe anzeigen"
+    echo ""
+}
+
+show_status() {
+    echo -e "${BLUE}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║                    Gmail Helper Status                           ║${NC}"
+    echo -e "${BLUE}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Python Venv
+    echo -ne "🐍 Python Venv:        "
+    if [ -f "$VENV_PYTHON" ]; then
+        echo -e "${GREEN}✅ OK${NC}"
+    else
+        echo -e "${RED}❌ Fehlt${NC}"
+    fi
+    
+    # Ollama Status
+    echo -ne "🤖 Ollama:             "
+    if check_ollama; then
+        MODEL=$(get_ollama_model)
+        echo -e "${GREEN}✅ Läuft${NC} (Modell: $MODEL)"
+    else
+        echo -e "${RED}❌ Nicht erreichbar${NC}"
+        echo "                       Starten mit: ollama serve"
+    fi
+    
+    # Laufende Gmail Helper Prozesse
+    echo -ne "📧 Gmail Helper:       "
+    RUNNING_PIDS=$(pgrep -f "(launcher\.py|app\.main)" 2>/dev/null || true)
+    if [ -n "$RUNNING_PIDS" ]; then
+        echo -e "${GREEN}✅ Läuft${NC} (PIDs: $RUNNING_PIDS)"
+    else
+        echo -e "${YELLOW}⏹️  Gestoppt${NC}"
+    fi
+    
+    # Credentials
+    echo -ne "🔑 credentials.json:   "
+    if [ -f "$PROJECT_ROOT/credentials.json" ]; then
+        echo -e "${GREEN}✅ Vorhanden${NC}"
+    else
+        echo -e "${RED}❌ Fehlt${NC}"
+    fi
+    
+    echo -ne "🔓 token.json:         "
+    if [ -f "$PROJECT_ROOT/token.json" ]; then
+        echo -e "${GREEN}✅ Authentifiziert${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Fehlt${NC} (wird bei erstem Lauf erstellt)"
+    fi
+    
+    # Config
+    echo ""
+    echo -e "${BLUE}⚙️  Konfiguration (.env):${NC}"
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        grep -E '^(OLLAMA|GMAIL|MAX|DRY|SET_LABEL|LOG_LEVEL)' "$PROJECT_ROOT/.env" 2>/dev/null | sed 's/^/   /' || echo "   (Standard-Werte werden verwendet)"
+    else
+        echo -e "   ${YELLOW}(Keine .env-Datei, Standard-Werte werden verwendet)${NC}"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+}
+
+# =============================================================================
+# Hauptlogik
+# =============================================================================
+
+main() {
+    COMMAND="${1:-}"
+    
+    # Wenn kein Command, zeige Willkommensbildschirm
+    if [ -z "$COMMAND" ]; then
+        show_welcome
+        exit 0
+    fi
+    
+    # Command "run" verarbeiten
+    if [ "$COMMAND" = "run" ]; then
+        
+        # Command ist "run", prüfe auf Flags
+        shift || true
+        
+        # Parse flags
+        MODE=""  # default: kein Modus
+        EXTRA_ARGS=()
+        
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --test|-t)
+                    MODE="test"
+                    shift
+                    ;;
+                --live|-l)
+                    MODE="live"
+                    shift
+                    ;;
+                --ui)
+                    echo -e "${RED}❌ UI-Modus wurde entfernt${NC}"
+                    echo "   Verwende: gmailhelper run --test  oder  gmailhelper run --live"
+                    exit 1
+                    ;;
+                --help|-h)
+                    show_help
+                    exit 0
+                    ;;
+                *)
+                    EXTRA_ARGS+=("$1")
+                    shift
+                    ;;
+            esac
+        done
+        
+        check_venv
+        
+        # Prüfe ob Mode gesetzt wurde
+        if [ -z "$MODE" ]; then
+            echo -e "${RED}❌ Fehler: Keine Option angegeben für 'run'${NC}"
+            echo ""
+            echo "Verwendung: gmailhelper run [OPTION]"
+            echo ""
+            echo "Optionen:"
+            echo "  --test, -t     Test-Modus (Dry-Run, einmalig)"
+            echo "  --live, -l     Live-Modus (Dauerlauf, setzt Labels)"
+            echo ""
+            echo "Beispiele:"
+            echo "  gmailhelper run --test"
+            echo "  gmailhelper run --live"
+            exit 1
+        fi
+        
+        case "$MODE" in
+            test)
+                # Test-Modus (Dry-Run, einmalig)
+                echo -e "${YELLOW}🧪 Test-Modus (Dry-Run)${NC}"
+                echo "   Es werden keine Labels gesetzt, nur angezeigt was passieren würde."
+                echo ""
+                
+                if ! check_ollama; then
+                    echo -e "${YELLOW}⚠️  Warnung: Ollama nicht erreichbar unter localhost:11434${NC}"
+                    echo "    Starte zuerst: ollama serve"
+                    exit 1
+                fi
+                
+                cd "$PROJECT_ROOT" && "$VENV_PYTHON" -m app.main --dry-run "${EXTRA_ARGS[@]}"
+                ;;
+                
+            live)
+                # Live-Modus (Dauerlauf)
+                echo -e "${GREEN}🏷️  Live-Modus (Dauerlauf)${NC}"
+                echo "   Labels werden wirklich gesetzt!"
+                echo "   Prüfung alle 30 Sekunden. Zum Beenden: Ctrl+C"
+                echo ""
+                
+                if ! check_ollama; then
+                    echo -e "${RED}❌ Fehler: Ollama nicht erreichbar unter localhost:11434${NC}"
+                    echo "    Starte zuerst: ollama serve"
+                    exit 1
+                fi
+                
+                if [ ! -f "$PROJECT_ROOT/credentials.json" ]; then
+                    echo -e "${RED}❌ Fehler: credentials.json nicht gefunden${NC}"
+                    exit 1
+                fi
+                
+                cd "$PROJECT_ROOT" && "$VENV_PYTHON" -m app.main --loop --interval 30 "${EXTRA_ARGS[@]}"
+                ;;
+        esac
+        
+    elif [ "$COMMAND" = "setup" ]; then
+        # Parse setup flags
+        shift || true
+        SETUP_ARGS=()
+        
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --reset)
+                    SETUP_ARGS+=("--reset")
+                    shift
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        
+        # Setup: Verwende System-Python für den Anfang, da venv evtl. noch nicht existiert
+        cd "$PROJECT_ROOT"
+        if [ -f "$VENV_PYTHON" ]; then
+            PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH" "$VENV_PYTHON" -m app.setup "${SETUP_ARGS[@]}"
+        else
+            # Fallback: System Python verwenden
+            PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH" python3 -m app.setup "${SETUP_ARGS[@]}" 2>/dev/null || PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH" python -m app.setup "${SETUP_ARGS[@]}"
+        fi
+        
+    elif [ "$COMMAND" = "stop" ]; then
+        echo -e "${BLUE}🛑 Stoppe Gmail Helper Prozesse...${NC}"
+        echo ""
+        
+        # Finde und beende launcher.py Prozesse
+        LAUNCHER_PIDS=$(pgrep -f "launcher\.py" 2>/dev/null || true)
+        if [ -n "$LAUNCHER_PIDS" ]; then
+            echo "   Beende UI (launcher.py): $LAUNCHER_PIDS"
+            kill $LAUNCHER_PIDS 2>/dev/null || true
+            sleep 1
+            # Force kill falls noch läuft
+            kill -9 $LAUNCHER_PIDS 2>/dev/null || true
+        fi
+        
+        # Finde und beende app.main Prozesse
+        MAIN_PIDS=$(pgrep -f "app\.main" 2>/dev/null || true)
+        if [ -n "$MAIN_PIDS" ]; then
+            echo "   Beende Hauptprogramm (app.main): $MAIN_PIDS"
+            kill $MAIN_PIDS 2>/dev/null || true
+            sleep 1
+            # Force kill falls noch läuft
+            kill -9 $MAIN_PIDS 2>/dev/null || true
+        fi
+        
+        # Zusätzlich: Beende Python-Prozesse im Projektverzeichnis
+        PYTHON_PIDS=$(ps aux | grep "$PROJECT_ROOT" | grep -E "(python|launcher)" | grep -v grep | awk '{print $2}' || true)
+        if [ -n "$PYTHON_PIDS" ]; then
+            echo "   Beende Python-Prozesse: $PYTHON_PIDS"
+            kill $PYTHON_PIDS 2>/dev/null || true
+            sleep 1
+            kill -9 $PYTHON_PIDS 2>/dev/null || true
+        fi
+        
+        echo ""
+        echo -e "${GREEN}✅ Gmail Helper wurde gestoppt${NC}"
+        
+    elif [ "$COMMAND" = "status" ] || [ "$COMMAND" = "st" ]; then
+        show_status
+        
+    elif [ "$COMMAND" = "help" ] || [ "$COMMAND" = "-h" ] || [ "$COMMAND" = "--help" ]; then
+        show_help
+        
+    else
+        echo -e "${RED}❌ Unbekannter Befehl: $COMMAND${NC}"
+        echo ""
+        show_help
+        exit 1
+    fi
+}
+
+main "$@"

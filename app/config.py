@@ -26,7 +26,7 @@ class AppConfig:
     """
 
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b-instruct"
+    ollama_model: str = "mistral:7b-instruct"
     gmail_query: str = "in:inbox is:unread newer_than:2d"
     labels_allowed: List[str] = field(
         default_factory=lambda: [
@@ -58,7 +58,7 @@ def load_config(env_file: str | None = None) -> AppConfig:
     _ensure_basic_logging()
 
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
-    ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct").strip()
+    ollama_model = os.getenv("OLLAMA_MODEL", "mistral:7b-instruct").strip()
     gmail_query = os.getenv("GMAIL_Q", "in:inbox is:unread newer_than:2d").strip()
     dry_run = os.getenv("DRY_RUN", "false").lower() in {"1", "true", "yes", "y"}
     set_label_colors = os.getenv("SET_LABEL_COLORS", "false").lower() in {"1", "true", "yes", "y"}
