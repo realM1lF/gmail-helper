@@ -3,4 +3,5 @@ google-auth-httplib2
 google-auth-oauthlib
 httpx
 python-dotenv
+beautifulsoup4
 
