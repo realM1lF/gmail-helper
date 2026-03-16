@@ -96,7 +96,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
                 logger.info("Skip (bereits spezifisch gelabelt): %s | %s | vorhanden=%s", mid, subject[:80], ", ".join(existing_user_labels))
                 continue
             # Payload begrenzen
-            safe_body = body[:1000]
+            safe_body = body[:4000]
             labels: Set[str] = set(classifier.classify(sender, subject, safe_body))
             logger.info("Klassifiziert: %s | %s -> %s", mid, subject[:80], ", ".join(sorted(labels)))
             # Wenn wir spezifische Labels haben, und 'Sonstiges' dabei ist, entferne Sonstiges
@@ -139,7 +139,7 @@ def run(dry_run_cli: bool | None = None, q_cli: str | None = None, max_results_c
     for mid in message_ids2:
         try:
             subject, sender, body, label_ids, internal_ts = gmail.fetch_message_core(mid)
-            safe_body = body[:1000]
+            safe_body = body[:4000]
             labels2: Set[str] = set(classifier.classify(sender, subject, safe_body))
             # Wenn spezifische Labels gefunden wurden, Sonstiges entfernen
             if any(l for l in labels2 if l != "Sonstiges"):
