@@ -6,6 +6,12 @@ import re
 import logging
 from typing import Dict, List, Tuple, Optional
 
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
+
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
@@ -128,13 +134,18 @@ class GmailClient:
                 try:
                     decoded = base64.urlsafe_b64decode(data).decode(errors="ignore")
                     if mime.startswith("text/html"):
-                        # Einfache HTML->Text Konvertierung
-                        text = re.sub(r"<\s*br\s*/?>", "\n", decoded, flags=re.I)
-                        text = re.sub(r"<\s*/p\s*>", "\n", text, flags=re.I)
-                        text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.I)
-                        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
-                        text = re.sub(r"<[^>]+>", " ", text)
-                        decoded = text
+                        # HTML->Text Konvertierung mit BeautifulSoup (Fallback auf Regex)
+                        if HAS_BS4:
+                            soup = BeautifulSoup(decoded, 'html.parser')
+                            decoded = soup.get_text(separator=' ', strip=True)
+                        else:
+                            # Fallback: Einfache Regex-basierte Bereinigung
+                            text = re.sub(r"<\s*br\s*/?>", "\n", decoded, flags=re.I)
+                            text = re.sub(r"<\s*/p\s*>", "\n", text, flags=re.I)
+                            text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.I)
+                            text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+                            text = re.sub(r"<[^>]+>", " ", text)
+                            decoded = text
                     body_accum.append(decoded)
                 except Exception:
                     pass
