@@ -33,38 +33,132 @@ ALLOWED_LABEL_COLORS = [
 
 
 class GmailClient:
-    """Kapselt Authentifizierung und Kern-Operationen gegen die Gmail API."""
+    """Kapselt Authentifizierung und Kern-Operationen gegen die Gmail API.
+    
+    Implementiert automatischen Token-Refresh für Dauerbetrieb im Loop-Modus.
+    """
 
     def __init__(self) -> None:
+        self._creds: Optional[Credentials] = None
         self.service = self._auth()
 
-    def _auth(self):
-        creds = None
+    def _load_credentials(self) -> Optional[Credentials]:
+        """Lädt Credentials aus token.json wenn vorhanden."""
         if os.path.exists("token.json"):
-            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+            return Credentials.from_authorized_user_file("token.json", SCOPES)
+        return None
+
+    def _save_credentials(self, creds: Credentials) -> None:
+        """Speichert Credentials in token.json."""
+        with open("token.json", "w") as f:
+            f.write(creds.to_json())
+
+    def _refresh_credentials(self, creds: Credentials) -> Credentials:
+        """Refresht abgelaufene Credentials wenn möglich."""
+        if creds and creds.expired and creds.refresh_token:
+            logger.info("Token ist abgelaufen, refreshe...")
+            creds.refresh(Request())
+            self._save_credentials(creds)
+            logger.info("Token erfolgreich refreshed.")
+        return creds
+
+    def _authenticate_new(self) -> Credentials:
+        """Führt neue OAuth-Authentifizierung durch."""
+        logger.info("Starte neue OAuth-Authentifizierung...")
+        flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+        creds = flow.run_local_server(port=0)
+        self._save_credentials(creds)
+        logger.info("Neue Authentifizierung erfolgreich.")
+        return creds
+
+    def _auth(self) -> build:
+        """Authentifiziert und erstellt den Gmail Service.
+        
+        Versucht zuerst bestehende Credentials zu laden und zu refreshen.
+        Bei ungültigen/keinen Credentials wird neue Authentifizierung durchgeführt.
+        """
+        creds = self._load_credentials()
+        
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                creds = self._refresh_credentials(creds)
             else:
-                flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open("token.json", "w") as f:
-                f.write(creds.to_json())
+                creds = self._authenticate_new()
+        
+        self._creds = creds
         return build("gmail", "v1", credentials=creds)
+
+    def _ensure_valid_credentials(self) -> None:
+        """Stellt sicher, dass Credentials gültig sind vor API-Calls.
+        
+        Wird vor jedem API-Call aufgerufen um abgelaufene Tokens zu erkennen
+        und automatisch zu refreshen. Bei 401-Fehlern wird Re-Authentifizierung erzwungen.
+        """
+        if not self._creds:
+            logger.warning("Keine Credentials vorhanden, erstelle Service neu...")
+            self.service = self._auth()
+            return
+
+        # Prüfe ob Token abgelaufen oder kurz vor Ablauf (< 5 Minuten)
+        if not self._creds.valid or (self._creds.expiry and self._creds.expired):
+            logger.info("Credentials ungültig oder abgelaufen, refreshe...")
+            if self._creds.refresh_token:
+                try:
+                    self._creds.refresh(Request())
+                    self._save_credentials(self._creds)
+                    # Service mit neuen Credentials neu erstellen
+                    self.service = build("gmail", "v1", credentials=self._creds)
+                    logger.info("Credentials refreshed und Service neu erstellt.")
+                except Exception as e:
+                    logger.error("Token-Refresh fehlgeschlagen: %s", e)
+                    # Bei Refresh-Fehler: Neue Authentifizierung erzwingen
+                    self.service = self._auth()
+            else:
+                logger.warning("Kein refresh_token vorhanden, neue Authentifizierung...")
+                self.service = self._auth()
+
+    def _handle_api_error(self, error: HttpError) -> bool:
+        """Behandelt API-Fehler und versucht Re-Authentifizierung bei 401.
+        
+        Returns:
+            True wenn Retry möglich ist, False bei nicht behebbarem Fehler.
+        """
+        if error.resp.status == 401:
+            logger.warning("401 Unauthorized erhalten, erzwinge Re-Authentifizierung...")
+            self.service = self._auth()
+            return True
+        return False
 
     def ensure_labels(self, names: List[str], colors: Optional[Dict[str, Dict[str, str]]] = None) -> Dict[str, str]:
         """Stellt sicher, dass alle gewünschten User-Labels existieren und setzt optional Farben.
 
         colors: Mapping Labelname -> {"backgroundColor": "#RRGGBB", "textColor": "#RRGGBB"}
         """
-        existing = self.service.users().labels().list(userId="me").execute().get("labels", [])
+        self._ensure_valid_credentials()
+        
+        try:
+            existing = self.service.users().labels().list(userId="me").execute().get("labels", [])
+        except HttpError as e:
+            if self._handle_api_error(e):
+                # Retry nach Re-Authentifizierung
+                existing = self.service.users().labels().list(userId="me").execute().get("labels", [])
+            else:
+                raise
+        
         name_to_id = {l["name"]: l["id"] for l in existing if l.get("type") == "user"}
         for name in names:
             if name not in name_to_id:
                 # Immer ohne Farbe anlegen, Farben separat per Patch setzen
                 body = {"name": name}
-                lab = self.service.users().labels().create(userId="me", body=body).execute()
-                name_to_id[name] = lab["id"]
+                try:
+                    lab = self.service.users().labels().create(userId="me", body=body).execute()
+                    name_to_id[name] = lab["id"]
+                except HttpError as e:
+                    if self._handle_api_error(e):
+                        lab = self.service.users().labels().create(userId="me", body=body).execute()
+                        name_to_id[name] = lab["id"]
+                    else:
+                        raise
 
         # Für bestehende Labels ggf. Farben per Patch setzen
         if colors:
@@ -76,6 +170,7 @@ class GmailClient:
 
     def _try_set_label_color(self, label_id: str, label_name: str, desired: Dict[str, str]) -> None:
         """Setzt eine Farbe aus der Gmail-Palette (nur ALLOWED_LABEL_COLORS)."""
+        self._ensure_valid_credentials()
         start = abs(hash(label_name)) % len(ALLOWED_LABEL_COLORS)
         order = ALLOWED_LABEL_COLORS[start:] + ALLOWED_LABEL_COLORS[:start]
         for bg in order:
@@ -88,21 +183,34 @@ class GmailClient:
                     ).execute()
                     logger.info("Label '%s' Farbe gesetzt auf bg=%s txt=%s", label_name, bg, txt)
                     return
-                except HttpError:
+                except HttpError as e:
+                    if e.resp.status == 401:
+                        if self._handle_api_error(e):
+                            continue  # Retry mit neuem Service
                     continue
         logger.warning("Keine kompatible Farbe für Label '%s' gefunden; verwende Standard.", label_name)
 
     def list_new_message_ids(self, q: str, max_results: int = 20) -> List[str]:
         """Listet bis zu `max_results` Nachrichten-IDs mit Pagination auf."""
+        self._ensure_valid_credentials()
         collected: List[str] = []
         page_token: Optional[str] = None
         while True:
             batch_max = max_results - len(collected)
             if batch_max <= 0:
                 break
-            res = self.service.users().messages().list(
-                userId="me", q=q, maxResults=min(100, batch_max), pageToken=page_token
-            ).execute()
+            try:
+                res = self.service.users().messages().list(
+                    userId="me", q=q, maxResults=min(100, batch_max), pageToken=page_token
+                ).execute()
+            except HttpError as e:
+                if self._handle_api_error(e):
+                    # Retry nach Re-Authentifizierung
+                    res = self.service.users().messages().list(
+                        userId="me", q=q, maxResults=min(100, batch_max), pageToken=page_token
+                    ).execute()
+                else:
+                    raise
             msgs = res.get("messages", [])
             collected.extend([m["id"] for m in msgs])
             page_token = res.get("nextPageToken")
@@ -111,7 +219,14 @@ class GmailClient:
         return collected[:max_results]
 
     def fetch_message_core(self, msg_id: str) -> Tuple[str, str, str, List[str], int]:
-        msg = self.service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        self._ensure_valid_credentials()
+        try:
+            msg = self.service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        except HttpError as e:
+            if self._handle_api_error(e):
+                msg = self.service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+            else:
+                raise
         payload = msg.get("payload", {})
         headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
         subject = headers.get("Subject", "")
@@ -162,18 +277,26 @@ class GmailClient:
     def batch_add_labels(self, message_ids: List[str], add_label_ids: List[str]) -> None:
         if not message_ids:
             return
+        self._ensure_valid_credentials()
         try:
             self.service.users().messages().batchModify(
                 userId="me",
                 body={"ids": message_ids, "addLabelIds": add_label_ids},
             ).execute()
         except HttpError as e:
-            logger.error("batchModify fehlgeschlagen: %s", e)
-            raise
+            if self._handle_api_error(e):
+                self.service.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": message_ids, "addLabelIds": add_label_ids},
+                ).execute()
+            else:
+                logger.error("batchModify fehlgeschlagen: %s", e)
+                raise
 
     def batch_modify(self, message_ids: List[str], add_label_ids: Optional[List[str]] = None, remove_label_ids: Optional[List[str]] = None) -> None:
         if not message_ids:
             return
+        self._ensure_valid_credentials()
         body: Dict[str, List[str]] = {"ids": message_ids}
         if add_label_ids:
             body["addLabelIds"] = add_label_ids
@@ -182,7 +305,10 @@ class GmailClient:
         try:
             self.service.users().messages().batchModify(userId="me", body=body).execute()
         except HttpError as e:
-            logger.error("batchModify (add/remove) fehlgeschlagen: %s", e)
-            raise
+            if self._handle_api_error(e):
+                self.service.users().messages().batchModify(userId="me", body=body).execute()
+            else:
+                logger.error("batchModify (add/remove) fehlgeschlagen: %s", e)
+                raise
 
 
